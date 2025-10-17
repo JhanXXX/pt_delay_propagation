@@ -1,0 +1,11 @@
+conda create -n sl_kpi python=3.10
+
+ipykernel
+requests
+gtfs-realtime-bindings-1.0.0
+py7zr
+pandas
+gtfs-kit
+matplotlib
+seaborn
+scikit-learn
