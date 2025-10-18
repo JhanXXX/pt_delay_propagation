@@ -49,15 +49,10 @@ def prepare_stop_pairs(db_path,gap,ob_window):
             )
             SELECT 
                 tp.*,
-                r.route_id,
-                r.route_short_name AS line_name,
-                r.route_type,
                 COALESCE(obs.his_dwell_count, 0) AS his_dwell_count,
                 COALESCE(obs.his_avg_delay, 0) AS his_avg_delay,
                 COALESCE(obs.his_avg_dwell, 0) AS his_avg_dwell
             FROM tripupdates_poi tp
-            JOIN trips t ON tp.trip_id = t.trip_id
-            JOIN routes r ON r.route_id = t.route_id
             LEFT JOIN observation obs
                 ON tp.stop_id = obs.stop_id 
                 AND tp.start_date = obs.start_date 
@@ -83,9 +78,6 @@ def prepare_stop_pairs(db_path,gap,ob_window):
             a.trip_id as trip_id,
             a.start_date as start_date,
             a.vehicle_id as vehicle_id,
-            a.route_id as route_id,
-            a.line_name as line_name,
-            a.route_type as route_type,
             a.stop_id as stop_i,
             a.stop_sequence as seq_i,
             a.arr_delay as arr_delay_i,

@@ -24,18 +24,13 @@ def compare_methods(db_path, gap, output_dir,ob_window = 1200):
     with sqlite3.connect(db_path) as conn:
         load_query = """
             SELECT * FROM stop_pairs
-            WHERE route_type = '700'
-            AND arr_delay_i IS NOT NULL 
+            WHERE arr_delay_i IS NOT NULL 
             AND arr_delay_j IS NOT NULL
             AND travel_time > 0
         """
 
         df = pd.read_sql_query(load_query, conn)
         print(f"Loaded {len(df):,} observations")
-        # Add transport mode label
-        df['transport_mode'] = df['route_type'].map({
-            700: 'Bus'
-        })
 
     # Treatment: Continuous delay at stop i (in seconds)
     # Outcome: Continuous delay at stop j ({gap} stations after i) (in seconds)
