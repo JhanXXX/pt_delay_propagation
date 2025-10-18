@@ -84,7 +84,7 @@ def compare_methods(db_path, gap, output_dir,ob_window = 1200):
 
     plt.tight_layout()
     plt.savefig(f"{output_dir}/treatment_outcome_distribution.png", dpi=300, bbox_inches='tight')
-    print(f"\nSaved: {output_dir}/treatment_outcome_distribution.png")
+
     plt.close()
 
     # step 3: identify confounders
@@ -222,7 +222,6 @@ def compare_methods(db_path, gap, output_dir,ob_window = 1200):
 
     plt.tight_layout()
     plt.savefig(f"{output_dir}/gps_distribution.png", dpi=300, bbox_inches='tight')
-    print(f"Saved: {output_dir}/gps_distribution.png")
     plt.close()
 
     # Step 3: Trim for common support
@@ -266,35 +265,130 @@ def compare_methods(db_path, gap, output_dir,ob_window = 1200):
     print(f"Interpretation: Balancing treatment assignment, each 1-second increase")
     print(f"                in delay_i causes {gps_beta:.4f} seconds increase in delay_j")
 
-    # Step 5: Estimate dose-response curve
+# Step 5: Estimate dose-response curve
     print("\nStep 5: Estimating dose-response curve...")
 
+    # ===================================================================
+    # METHOD 1: Use the fitted GPS regression model directly
+    # ===================================================================
+    # This is theoretically correct and simple
+    # The model E[Y | D, GPS] = beta_0 + beta_1*D + beta_2*GPS
+    # gives us the dose-response function
+    
     # Create grid of treatment values
-    D_grid = np.linspace(D_cs.min(), D_cs.max(), 50)
-    dose_response_curve = []
+    D_grid = np.linspace(D_cs.min(), D_cs.max(), 100)
+    GPS_mean = GPS_cs.mean()  # Use mean GPS for prediction
+    
+    # Predict outcomes at each treatment level, holding GPS constant
+    dose_response_curve_method1 = dose_response_model.predict(
+        np.column_stack([D_grid, np.full(100, GPS_mean)])
+    )
+    
+    # Calculate 95% confidence bands (optional but informative)
+    # Bin the data to compute empirical variance
+    n_bins = 20
+    bin_edges = np.linspace(D_cs.min(), D_cs.max(), n_bins + 1)
+    bin_means = []
+    bin_stds = []
+    bin_centers = []
+    
+    for i in range(n_bins):
+        mask = (D_cs.ravel() >= bin_edges[i]) & (D_cs.ravel() < bin_edges[i+1])
+        if mask.sum() > 10:  # Only compute if sufficient observations
+            bin_centers.append((bin_edges[i] + bin_edges[i+1]) / 2)
+            bin_means.append(Y_cs[mask].mean())
+            bin_stds.append(Y_cs[mask].std() / np.sqrt(mask.sum()))  # SE
+    
+    bin_centers = np.array(bin_centers)
+    bin_means = np.array(bin_means)
+    bin_stds = np.array(bin_stds)
 
+    # ===================================================================
+    # METHOD 2: Kernel-based local averaging
+    # ===================================================================
+    # This uses local weighting around each treatment level
+    # More computationally intensive but flexible
+    
+    bandwidth = sigma_D * 0.5  # Bandwidth for kernel (adjust as needed)
+    dose_response_curve_method2 = []
+    
     for d in D_grid:
-        # For each treatment level, compute E[Y | D=d, GPS]
-        # Use weighted regression where weights come from GPS evaluated at d
-        weights = norm.pdf(d, loc=mu_D_cs, scale=sigma_D)
+        # Kernel weight: observations near treatment=d get higher weight
+        kernel_weights = norm.pdf(D_cs.ravel(), loc=d, scale=bandwidth)
+        
+        # GPS weight: for balancing confounders
+        # Use inverse probability weighting
+        gps_weights = 1 / (GPS_cs + 1e-6)  # Add small constant to avoid division by zero
+        
+        # Combine weights
+        combined_weights = kernel_weights * gps_weights
+        
+        # Normalize weights
+        combined_weights = combined_weights / combined_weights.sum()
         
         # Weighted average outcome
-        weighted_outcome = np.average(Y_cs, weights=weights)
-        dose_response_curve.append(weighted_outcome)
-
-    # Plot dose-response curve
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(D_grid, dose_response_curve, linewidth=3, color='blue', label='GPS dose-response')
-    ax.scatter(D_cs[::50], Y_cs[::50], alpha=0.2, s=10, color='gray', label='Observed data (sample)')
-    ax.set_xlabel('Treatment: delay_i (seconds)', fontsize=12)
-    ax.set_ylabel('Expected Outcome: E[delay_j | delay_i]', fontsize=12)
-    ax.set_title('Dose-Response Function (GPS-adjusted)', fontsize=13, fontweight='bold')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+        weighted_outcome = np.sum(Y_cs.ravel() * combined_weights)
+        dose_response_curve_method2.append(weighted_outcome)
+    
+    dose_response_curve_method2 = np.array(dose_response_curve_method2)
+    
+    
+    # ===================================================================
+    # PLOTTING: Compare both methods
+    # ===================================================================
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Left plot: Method 1 (Regression-based)
+    axes[0].plot(D_grid, dose_response_curve_method1, linewidth=3, color='blue', 
+                 label=f'GPS-adjusted (β={gps_beta:.3f})')
+    axes[0].scatter(D_cs[::100], Y_cs[::100], alpha=0.15, s=8, color='gray', 
+                   label='Observed data (sample)')
+    
+    # Add binned means with error bars
+    axes[0].errorbar(bin_centers, bin_means, yerr=1.96*bin_stds, 
+                    fmt='o', color='red', markersize=6, capsize=5, 
+                    label='Binned means ±95% CI', alpha=0.7)
+    
+    # Add reference line y=x
+    lim_min = min(D_grid.min(), dose_response_curve_method1.min())
+    lim_max = max(D_grid.max(), dose_response_curve_method1.max())
+    axes[0].plot([lim_min, lim_max], [lim_min, lim_max], 'k--', 
+                alpha=0.3, linewidth=1.5, label='y=x (perfect propagation)')
+    
+    axes[0].set_xlabel('Treatment: delay_i (seconds)', fontsize=12)
+    axes[0].set_ylabel('Expected Outcome: E[delay_j | delay_i]', fontsize=12)
+    axes[0].set_title('Method 1: GPS Regression-Based Dose-Response', 
+                     fontsize=13, fontweight='bold')
+    axes[0].legend(fontsize=9)
+    axes[0].grid(True, alpha=0.3)
+    
+    
+    # Right plot: Method 2 (Kernel-based)
+    axes[1].plot(D_grid, dose_response_curve_method2, linewidth=3, color='green', 
+                 label='Kernel + GPS weighted')
+    axes[1].scatter(D_cs[::100], Y_cs[::100], alpha=0.15, s=8, color='gray', 
+                   label='Observed data (sample)')
+    
+    # Add binned means
+    axes[1].errorbar(bin_centers, bin_means, yerr=1.96*bin_stds, 
+                    fmt='o', color='red', markersize=6, capsize=5, 
+                    label='Binned means ±95% CI', alpha=0.7)
+    
+    # Add reference line
+    axes[1].plot([lim_min, lim_max], [lim_min, lim_max], 'k--', 
+                alpha=0.3, linewidth=1.5, label='y=x (perfect propagation)')
+    
+    axes[1].set_xlabel('Treatment: delay_i (seconds)', fontsize=12)
+    axes[1].set_ylabel('Expected Outcome: E[delay_j | delay_i]', fontsize=12)
+    axes[1].set_title(f'Method 2: Kernel-Based Dose-Response (h={bandwidth:.1f})', 
+                     fontsize=13, fontweight='bold')
+    axes[1].legend(fontsize=9)
+    axes[1].grid(True, alpha=0.3)
+    
     plt.tight_layout()
     plt.savefig(f"{output_dir}/dose_response_curve.png", dpi=300, bbox_inches='tight')
-    print(f"Saved: {output_dir}/dose_response_curve.png")
     plt.close()
+    
 
 
     # ============================================
@@ -402,7 +496,6 @@ def compare_methods(db_path, gap, output_dir,ob_window = 1200):
     ax.grid(True, alpha=0.3, axis='x')
     plt.tight_layout()
     plt.savefig(f"{output_dir}/covariate_balance_gps.png", dpi=300, bbox_inches='tight')
-    print(f"\nSaved: {output_dir}/covariate_balance_gps.png")
     plt.close()
 
     # ============================================
@@ -462,6 +555,5 @@ def compare_methods(db_path, gap, output_dir,ob_window = 1200):
 
     plt.tight_layout()
     plt.savefig(f"{output_dir}/causal_estimates_comparison.png", dpi=300, bbox_inches='tight')
-    print(f"\nSaved: {output_dir}/causal_estimates_comparison.png")
     plt.close()
 
